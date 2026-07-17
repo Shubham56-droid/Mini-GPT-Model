@@ -7,7 +7,9 @@ from src.trainer.trainer import Trainer
 
 from src.generation.generator import Generator
 
+from src.dataset.dataset_loader import DatasetLoader
 from src.dataset.dataloader import Dataloader
+
 
 import torch
 
@@ -19,7 +21,7 @@ import torch
 TRAIN = True          # True = Train model
                       # False = Only load model
 
-EPOCHS = 100
+EPOCHS = 10
 LEARNING_RATE = 0.001
 MODEL_PATH = "checkpoints/mini_gpt.pt"
 
@@ -30,8 +32,10 @@ def main():
     # Read Dataset
     # ==============================
 
-    reader = TextReader("data/raw/dictionary.txt")
-    text = reader.read()
+    # reader = TextReader("data/raw/dictionary.txt")
+    # text = reader.read()
+    loader = DatasetLoader("tinystories")
+    text = loader.load()
 
     tokenizer = Tokenizer()
     tokens = tokenizer.tokenize(text)
@@ -43,12 +47,31 @@ def main():
 
     vocabulary.load("data/vocabulary/vocab.json")
 
+
     encoded = vocabulary.encode(tokens)
     token_tensor = torch.tensor(encoded, dtype=torch.long)
 
-    loader = Dataloader(token_tensor,context_length=8)
+    #--------------------------------------------
+    # Train/ Validation Split
+    # here we divide data into train and validation in 80% and 20% percentage 
+    # 80% - train and 20 5 for validation 
+    # we do this so that model should not only memorize the dataset and answer (overfitting), instead it should learn from it and answer  
+    #--------------------------------------------
+   
+    split_index = int(len(token_tensor) * 0.80)
 
-    inputs, targets = loader.get_batch(0)
+    train_tokens = token_tensor[:split_index] # 80%
+
+    val_tokens = token_tensor[split_index:] # 20%
+
+    train_loader = Dataloader(train_tokens,context_length=8)
+
+    val_loader = Dataloader(val_tokens,context_length=8)
+
+    print(f"Train Tokens      : {len(train_tokens)}")
+    print(f"Validation Tokens : {len(val_tokens)}")
+
+    inputs, targets = train_loader.get_batch(0)
 
     print("Batch Input Shape :", inputs.shape)
     print("Batch Target Shape:", targets.shape)
@@ -105,7 +128,8 @@ def main():
     if TRAIN:
 
         logits, losses = trainer.train(
-            loader,
+            train_loader,
+            val_loader,
             epochs=EPOCHS
         )
 

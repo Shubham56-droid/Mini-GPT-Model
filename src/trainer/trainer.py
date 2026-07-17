@@ -3,9 +3,9 @@ import torch.nn as nn
 
 class Trainer:
     def __init__(self,model,device,learning_rate=0.001,warmup_epochs=10):
-
         self.model = model
         self.device = device
+        self.warmup_epochs = warmup_epochs
 
         self.criterion = nn.CrossEntropyLoss()
 
@@ -13,6 +13,7 @@ class Trainer:
             self.model.parameters(),
             lr=learning_rate
         )
+        self.initial_lr = learning_rate
 
         # Learning Rate Scheduler
 
@@ -22,9 +23,17 @@ class Trainer:
         #     step_size=50, #every 50 eopchs
         #     gamma=0.5 #reduce LR by half
         # )
+
         self.loss_history = []
 
     def train_step(self,inputs,targets):
+        # Forward
+        # ↓
+        # Loss
+        # ↓
+        # Backward
+        # ↓
+        # Update weights
 
         inputs = inputs.to(self.device)
         targets = targets.to(self.device)
@@ -55,25 +64,32 @@ class Trainer:
 
         return logits,loss
     
-    def train(self,loader,epochs=1000):
-
+    def train(self,train_loader,val_loader,epochs=1000):
         # Cosine Annealing
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer,T_max=epochs,eta_min=1e-6)
 
         
         for epoch in range(epochs):
+            if epoch < self.warmup_epochs:
 
-            epoch_indices = loader.get_epoch_indices()
+                warmup_lr = (
+                    self.initial_lr * (epoch + 1) / self.warmup_epochs
+                )
+
+                for group in self.optimizer.param_groups:
+                    group["lr"] = warmup_lr
+
+            epoch_indices = train_loader.get_epoch_indices()
 
             epoch_loss = 0
             num_batches = 0
 
-            for start_index  in epoch_indices:
+            for start_index in epoch_indices:
 
-                if start_index  + loader.batch_size > len(loader):
+                if start_index  + train_loader.batch_size > len(train_loader):
                     continue
 
-                inputs,targets = loader.get_batch(start_index)
+                inputs,targets = train_loader.get_batch(start_index)
 
                 logits,loss = self.train_step(inputs,targets)
 
@@ -83,42 +99,69 @@ class Trainer:
             # num_batches = (len(loader) - loader.batch_size + 1) // loader.batch_size
 
             average_loss = epoch_loss / num_batches
+            validation_loss = self.validate(val_loader)
 
             self.loss_history.append(average_loss)
-
-            self.scheduler.step()
+            
+            if epoch >= self.warmup_epochs:
+                self.scheduler.step()
 
             current_lr = self.optimizer.param_groups[0]["lr"]
 
             #print(f"Epoch: {epoch+1}/{epochs} | Loss: {loss.item():.4f}")
 
             # if (epoch + 1) % 10 == 0:
-            print(f"Epoch: {epoch+1}/{epochs} | "f"Average Loss: {average_loss:.4f} | "f"LR: {current_lr:.6f}")
+            print(
+                f"Epoch: {epoch+1}/{epochs} |"
+                f"Train Loss: {average_loss:.4f} |"
+                f"Validation Loss: {validation_loss:.4f} |"
+                f"LR: {current_lr:.6f}"
+                )
 
-           
         return logits, self.loss_history
     
     def save_model(self,path):
-
         torch.save(self.model.state_dict(),path)
-
         print(f"\nModel saved to {path}")
 
     def load_model(self,path):
-
         self.model.load_state_dict(torch.load(path,map_location=self.device))
-
         self.model.eval()
-
         print(f"\nModel loaded from {path}")
 
-# Forward
-# ↓
+    def validate(self,loader):
+        self.model.eval()
 
-# Loss
-# ↓
+        validation_loss = 0
+        num_batches = 0
 
-# Backward
-# ↓
+        with torch.no_grad():
+            epoch_indices = loader.get_epoch_indices()
+            for start_index in epoch_indices:
 
-# Update weights
+                if start_index + loader.batch_size > len(loader):
+                    continue
+
+                inputs,targets = loader.get_batch(start_index)
+
+                inputs = inputs.to(self.device)
+                targets = targets.to(self.device)
+
+                logits = self.model(inputs)
+
+                vocab_size = logits.size(-1)
+
+                logits = logits.view(-1,vocab_size)
+
+                targets = targets.view(-1)
+
+                loss = self.criterion(logits,targets)
+
+                validation_loss += loss.item()
+                num_batches +=1
+
+        self.model.train()
+
+        return validation_loss / num_batches
+
+
